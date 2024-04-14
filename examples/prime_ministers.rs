@@ -1,53 +1,51 @@
+use std::io::{Error, ErrorKind};
+
 use dioxus::prelude::*;
 use dioxus_sortable::{use_sorter, NullHandling, PartialOrdBy, SortBy, Sortable, Th, ThStatus};
 
 fn main() {
     wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
-    dioxus_web::launch(app);
+    launch(app);
 }
 
-fn app(cx: Scope) -> Element {
+fn app() -> Element {
     // Trigger pulling our data "externally"
-    let future = use_future(cx, (), |_| load_prime_ministers());
+    let fut = use_resource(move || async move { load_prime_ministers().await });
 
-    cx.render(rsx! {
+    rsx! {
         h1 { "Birthplaces of British prime ministers" }
-        future.value().map_or_else(
-            // Show a loading message while the data is being fetched
-            || rsx!{
-                p { "Loading..." }
-            },
-            // Pass the data onto our table component
-            |data| rsx!{
-                PrimeMinisters{ data: data.to_vec(), }
-            })
-    })
+        {
+            match fut.read().as_ref() {
+                Some(Ok(data))=> PrimeMinisters(data.to_owned()),
+                Some(Err(e)) =>  rsx! { "load data error!{e}" },
+                None => rsx! { "loading data..." },
+            }
+        }
+    }
 }
 
 /// Creates a sortable table of prime ministers and their birthplaces. Can be filtered by name.
 ///
 /// Each column header can be clicked to sort by that column. The current sort state is displayed in the header.
 #[allow(non_snake_case)]
-#[inline_props]
-fn PrimeMinisters(cx: Scope, data: Vec<Person>) -> Element {
+fn PrimeMinisters(data: Vec<Person>) -> Element {
     // Sorter hook must be called unconditionally
-    let sorter = use_sorter::<PersonField>(cx);
-    let name = use_state(cx, || "".to_string());
+    let mut sorter = use_sorter::<PersonField>();
+    let mut name = use_signal(String::default);
 
     // Filter the data
     let mut data = data
-        .to_owned()
         .into_iter()
-        .filter(|row| row.name.to_lowercase().contains(&name.get().to_lowercase()))
+        .filter(|row| row.name.to_lowercase().contains(&name.read().to_lowercase()))
         .collect::<Vec<_>>();
     // Sort the data. Unlike use_sorter, may be skipped
-    sorter.sort(data.as_mut_slice());
+    sorter.read().sort(data.as_mut_slice());
 
-    cx.render(rsx! {
+    rsx! {
         // Our simple search box
         input {
             placeholder: "Search by name",
-            oninput: move |evt| name.set(evt.value.clone()),
+            oninput: move |evt| name.set(evt.value()),
         }
 
         // Render a table like we would any other except for the `Th` component
@@ -61,7 +59,7 @@ fn PrimeMinisters(cx: Scope, data: Vec<Person>) -> Element {
                     // Here's how we might do it manually:
                     th {
                         // The `toggle_field` method triggers the state change and sorts the table
-                        onclick: move |_| sorter.toggle_field(PersonField::Birthplace),
+                        onclick: move |_| sorter.write().toggle_field(PersonField::Birthplace),
                         "Birthplace"
                         // The `ThStatus` helper component renders the current state. You could write your own custom status viewer with by using [`UseSorter::get_state`].
                         ThStatus {
@@ -74,30 +72,33 @@ fn PrimeMinisters(cx: Scope, data: Vec<Person>) -> Element {
                 }
             }
             tbody {
+                {
                 // Iterate over our Person data like we would any other.
                 data.iter().map(|row| {
+                    let Person{name, left_office, birthplace, country} = row;
                     rsx! {
                         tr {
-                            td { "{row.name}" }
+                            td { "{name}" }
                             td {
-                                match row.left_office {
+                                match left_office {
                                     None => rsx!(em { "Present" }),
                                     Some(ref x) => rsx!("{x}"),
                                 }
                             }
                             td {
-                                match row.birthplace {
+                                match birthplace {
                                     Birthplace::Unknown => rsx!(em { "Unknown" }),
                                     Birthplace::City(ref city) => rsx!("{city}")
                                 }
                             }
-                            td { "{row.country}" }
+                            td { "{country}" }
                         }
                     }
                 })
+                }
             }
         }
-    })
+    }
 }
 
 /// Our per-row data type that we want to sort
@@ -202,8 +203,10 @@ impl Person {
 }
 
 /// Our mock data source. In a real app this could be something like a `reqwest` call
-async fn load_prime_ministers() -> Vec<Person> {
-    vec![
+async fn load_prime_ministers() -> Result<Vec<Person>, Error> {
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+    let data = vec![
         Person::new("Robert Walpole", 1742, "Houghton Hall, Norfolk", "England"),
         Person::new(
             "Spencer Compton",
@@ -395,5 +398,8 @@ async fn load_prime_ministers() -> Vec<Person> {
         ),
         Person::new("Liz Truss", 2022, "Oxford, Oxfordshire", "England"),
         Person::new("Rishi Sunak", None, "Southampton, Hampshire", "England "),
-    ]
+    ];
+
+    //Err(Error::new(ErrorKind::TimedOut,"socket closed!"))
+    Ok(data)
 }

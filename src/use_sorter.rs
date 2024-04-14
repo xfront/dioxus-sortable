@@ -1,12 +1,15 @@
-use dioxus::prelude::*;
 use std::cmp::Ordering;
+
+use dioxus::prelude::*;
 
 /// Stores Dioxus hooks and state of our sortable items.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct UseSorter<'a, F: 'static> {
-    field: &'a UseState<F>,
-    direction: &'a UseState<Direction>,
+pub struct UseSorter<F: Copy + 'static> {
+    field: F,
+    direction: Direction,
 }
+
+pub type SignalSorter<T> = Signal<UseSorter<T>>;
 
 /// Trait used by [UseSorter](UseSorter) to sort a struct by a specific field. This must be implemented on the field enum. Type `T` represents the struct (table row) that is being sorted.
 ///
@@ -197,9 +200,9 @@ impl<F: Copy + Default + Sortable> UseSorterBuilder<F> {
     /// This fn (or [`Self::use_sorter`]) *must* be called or never used. See the docs on [`UseSorter::sort`] on using conditions.
     ///
     /// If the field or direction has not been set then the default values will be used.
-    pub fn use_sorter(self, cx: &ScopeState) -> UseSorter<F> {
-        let sorter = use_sorter(cx);
-        sorter.set_field(self.field, self.direction);
+    pub fn use_sorter(self) -> SignalSorter<F> {
+        let mut sorter = use_sorter::<F>();
+        sorter.write().set_field(self.field, self.direction);
         sorter
     }
 }
@@ -209,22 +212,24 @@ impl<F: Copy + Default + Sortable> UseSorterBuilder<F> {
 /// This fn (or [`UseSorterBuilder::use_sorter`]) *must* be called or never used. See the docs on [`UseSorter::sort`] on using conditions.
 ///
 /// Relies on `F::default()` for the initial value.
-pub fn use_sorter<F: Copy + Default + Sortable>(cx: &ScopeState) -> UseSorter<'_, F> {
-    let field = F::default();
-    UseSorter {
-        field: use_state(cx, || field),
-        direction: use_state(cx, || Direction::from_field(&field)),
-    }
+pub fn use_sorter<F: Copy + Default + Sortable>() -> SignalSorter<F> {
+    use_signal(|| {
+        let field = F::default();
+        UseSorter {
+            field: field,
+            direction: Direction::from_field(&field),
+        }
+    })
 }
 
-impl<'a, F> UseSorter<'a, F> {
+impl<F: Copy> UseSorter<F> {
     /// Returns the current field and direction. Can be used to recreate state with [UseSorterBuilder](UseSorterBuilder).
-    pub fn get_state(&self) -> (&F, &Direction) {
-        (self.field.get(), self.direction.get())
+    pub fn get_state(&self) -> (F, Direction) {
+        (self.field, self.direction)
     }
 
     /// Sets the sort field and toggles the direction (if applicable). Ignores unsortable fields.
-    pub fn toggle_field(&self, field: F)
+    pub fn toggle_field(&mut self, field: F)
     where
         F: Sortable,
     {
@@ -233,25 +238,25 @@ impl<'a, F> UseSorter<'a, F> {
             Some(sort_by) => {
                 use SortBy::*;
                 match sort_by {
-                    Fixed(dir) => self.direction.set(dir),
+                    Fixed(dir) => self.direction = dir,
                     Reversible(dir) => {
                         // Invert direction if the same field
-                        let dir = if *self.field.get() == field {
-                            self.direction.get().invert()
+                        let dir = if self.field == field {
+                            self.direction.invert()
                         } else {
                             // Reset state to new field
                             dir
                         };
-                        self.direction.set(dir);
+                        self.direction = dir;
                     }
                 }
-                self.field.set(field);
+                self.field = field;
             }
         }
     }
 
     /// Sets the sort field and direction state directly. Ignores unsortable fields. Ignores the direction if not valid for a field.
-    pub fn set_field(&self, field: F, dir: Direction)
+    pub fn set_field(&mut self, field: F, dir: Direction)
     where
         F: Sortable,
     {
@@ -260,8 +265,8 @@ impl<'a, F> UseSorter<'a, F> {
             Some(sort_by) => {
                 // Set state but ensure direction is valid
                 let dir = sort_by.ensure_direction(dir);
-                self.field.set(field);
-                self.direction.set(dir);
+                self.field = field;
+                self.direction = dir;
             }
         }
     }
@@ -276,7 +281,7 @@ impl<'a, F> UseSorter<'a, F> {
         F: PartialOrdBy<T> + Sortable,
     {
         let (field, dir) = self.get_state();
-        sort_by(field, *dir, field.null_handling(), items);
+        sort_by(&field, dir, field.null_handling(), items);
     }
 }
 
